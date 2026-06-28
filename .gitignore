@@ -1,0 +1,43 @@
+# Python (кэш компиляции)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+htmlcov/
+.toastie
+.cache
+.pytest_cache/
+.mypy_cache/
+
+# Виртуальное окружение (Virtual Environment)
+.venv/
+venv/
+ENV/
+env/
+
+# База данных Django (локальная)
+*.sqlite3
+db.sqlite3
+
+# Конфиденциальные данные (на будущее, если появится .env файл)
+.env
+*.env
+
+# Логи
+*.log
+celerybeat-schedule
+
+# Настройки редакторов кода и IDE
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# Мусор Windows
+Thumbs.db
+Ehthumbs.db
+Desktop.ini
