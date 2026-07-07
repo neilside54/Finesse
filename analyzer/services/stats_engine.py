@@ -1,171 +1,216 @@
-import io
-import chess.pgn
-import random
-from typing import List, Dict, Any
-from collections import Counter, defaultdict
+"""
+ChessStatsEngine — overall profile statistics: breakdown by time control
+(bullet/blitz/rapid/daily/...), win rate, and average rating for the user
+and their opponents in each mode.
+
+avg_peer_accuracy resolution order:
+    1. Real data — RatingAccuracySample.benchmark_for(time_class, rating),
+       averaged from actually-measured opponent accuracy samples collected
+       by ChessSkillsEngine/GameEvaluator across analyzed games (any user's,
+       not just this one — it's a community-wide running benchmark).
+    2. Estimated fallback — RATING_ACCURACY_CURVE, a hand-picked
+       rating -> expected-accuracy curve, used only while there isn't yet
+       enough real data for that time_class/rating bucket.
+
+Every mode's response includes "avg_peer_accuracy_source": "actual" or
+"estimated" so the consumer (and the user) always knows which one they're
+looking at — no value is presented as measured when it's actually a guess.
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from typing import Any
+
+from analyzer.models import RatingAccuracySample
+from analyzer.utils.visualizer import MetricVisualizer
+
+# Curve points (rating -> expected accuracy, %), linearly interpolated between them.
+# Hand-picked, NOT derived from measured data — see module docstring.
+RATING_ACCURACY_CURVE: list[tuple[int, float]] = [
+    (800, 50.0),
+    (1000, 55.0),
+    (1200, 60.0),
+    (1400, 65.0),
+    (1600, 70.0),
+    (1800, 75.0),
+    (2000, 80.0),
+    (2200, 85.0),
+    (2400, 90.0),
+]
+
+# How close a real-data sample's rating needs to be to the mode's average
+# rating to be included in the benchmark average. See RatingAccuracySample.benchmark_for.
+BENCHMARK_RATING_WINDOW = 100
 
 
 class ChessStatsEngine:
-    """
-    Ядро анализатора: обрабатывает PGN данные, рассчитывает точность,
-    активность фигур и формирует психологические инсайты (Skills).
-    """
+    WIN_RATE_BENCHMARK = 50.0
 
-    PIECE_MAP = {
-        chess.PAWN: "pawn",
-        chess.KNIGHT: "knight",
-        chess.BISHOP: "bishop",
-        chess.ROOK: "rook",
-        chess.QUEEN: "queen",
-        chess.KING: "king"
-    }
+    def analyze_profile(self, raw_games: list[dict[str, Any]], username: str) -> dict[str, Any]:
+        if not raw_games:
+            return {}
 
-    def analyze_profile(self, games: List[Dict[str, Any]], username: str) -> Dict[str, Any]:
-        """
-        Главный метод: агрегирует данные по всем играм пользователя.
-        """
-        total_games_received = len(games)
+        overall_metrics = self._calculate_overall(raw_games)
+        modes_metrics = self._calculate_modes(raw_games)
 
-        report = {
-            "overall": {
-                "total_games": total_games_received,
-                "platforms": dict(Counter(g["platform"] for g in games)),
-                # Если игр мало, предупреждаем пользователя
-                "warning": "Low game count. Play more games for better accuracy." if total_games_received < 50 else None
-            },
-            "by_mode": defaultdict(lambda: {
-                "games_count": 0,
-                "total_moves": 0,
-                "user_accuracies": [],
-                "peer_accuracies": [],
-                "piece_usage": Counter(),
-                "avg_rating": 0,
-                "peer_avg_rating": 0
-            })
+        modes_formatted = {
+            mode: self._format_mode(data) for mode, data in modes_metrics.items()
         }
-
-        for game_data in games:
-            mode = game_data.get("time_class", "other")
-            stats = report["by_mode"][mode]
-
-            if not game_data.get("pgn"):
-                continue
-
-            pgn_io = io.StringIO(game_data["pgn"])
-            game = chess.pgn.read_game(pgn_io)
-
-            if not game:
-                continue
-
-            # Определяем цвет игрока на основе заголовков PGN
-            white_header = game.headers.get("White", "").lower()
-            is_white = white_header == username.lower()
-
-            # 1. Считаем ходы и активность фигур
-            move_count, piece_counts = self._analyze_moves(game, is_white)
-
-            # 2. Расчет Accuracy (Mock-логика)
-            # В будущем здесь будет: self._calculate_stockfish_accuracy(game)
-            user_acc, peer_acc = self._calculate_mock_accuracy(
-                game_data["user_result"],
-                game_data["user_rating"],
-                game_data["opponent_rating"]
-            )
-
-            # Обновляем статистику режима
-            stats["games_count"] += 1
-            stats["total_moves"] += move_count
-            stats["user_accuracies"].append(user_acc)
-            stats["peer_accuracies"].append(peer_acc)
-            stats["piece_usage"].update(piece_counts)
-
-            if game_data["user_rating"]:
-                stats["avg_rating"] += game_data["user_rating"]
-            if game_data["opponent_rating"]:
-                stats["peer_avg_rating"] += game_data["opponent_rating"]
-
-        return self._finalize_report(report)
-
-    def _analyze_moves(self, game: chess.pgn.Game, is_white: bool) -> (int, Counter):
-        """Проходит по дереву ходов и собирает статистику использования фигур."""
-        move_count = 0
-        piece_counts = Counter()
-        board = game.board()
-
-        for move in game.mainline_moves():
-            if board.turn == is_white:
-                piece_to_move = board.piece_at(move.from_square)
-                if piece_to_move:
-                    piece_type = piece_to_move.piece_type
-                    piece_counts[self.PIECE_MAP[piece_type]] += 1
-                    move_count += 1
-            board.push(move)
-
-        return move_count, piece_counts
-
-    def _calculate_mock_accuracy(self, result: str, user_rating: int, opp_rating: int) -> (float, float):
-        """Эмуляция расчета точности."""
-        base_map = {"win": 74.0, "draw": 68.0, "loss": 56.0}
-        base_acc = base_map.get(result, 65.0)
-
-        rating_bonus = (user_rating or 1200) / 2000.0
-        user_acc = base_acc + random.uniform(-6, 6) + rating_bonus
-
-        peer_rating_bonus = (opp_rating or 1200) / 2000.0
-        peer_acc = base_acc + random.uniform(-6, 6) + peer_rating_bonus
-
-        # Калибруем под реальные шахматные рамки
-        user_acc = max(min(user_acc, 99.5), 20.0)
-        peer_acc = max(min(peer_acc, 99.5), 20.0)
-
-        return round(user_acc, 2), round(peer_acc, 2)
-
-    def _generate_skills_feedback(self, user_acc: float, peer_acc: float, mode: str) -> Dict[str, str]:
-        """Генерация фидбека в стиле Lichess Coach Companion."""
-        diff = user_acc - peer_acc
-        if diff > 2.0:
-            return {
-                "title": "High Accuracy",
-                "desc": f"Your accuracy in {mode} is better than your peers. You make remarkably precise moves based on tactical alignment."
-            }
-        elif diff < -2.0:
-            return {
-                "title": "Needs Improvement",
-                "desc": f"Your peers are currently playing slightly tighter chess in {mode}. Watch out for minor tactical inaccuracies in complex positions."
-            }
-        else:
-            return {
-                "title": "Solid Performance",
-                "desc": f"You are head-to-head with your peers in {mode}. Your tactical foundation matches players of your exact caliber."
-            }
-
-    def _finalize_report(self, report: Dict) -> Dict:
-        """Усреднение данных и генерация финального JSON-структурированного отчета."""
-        final_by_mode = {}
-
-        for mode, data in report["by_mode"].items():
-            count = data["games_count"]
-            if count == 0:
-                continue
-
-            avg_user_acc = round(sum(data["user_accuracies"]) / count, 1)
-            avg_peer_acc = round(sum(data["peer_accuracies"]) / count, 1)
-
-            final_by_mode[mode] = {
-                "games_count": count,
-                "total_moves": data["total_moves"],
-                "avg_user_accuracy": avg_user_acc,
-                "avg_peer_accuracy": avg_peer_acc,
-                "avg_rating": int(data["avg_rating"] / count) if data["avg_rating"] else None,
-                "avg_peer_rating": int(data["peer_avg_rating"] / count) if data["peer_avg_rating"] else None,
-                "skills": self._generate_skills_feedback(avg_user_acc, avg_peer_acc, mode),
-                "piece_activity_percentage": {
-                    p: round((c / data["total_moves"]) * 100, 1)
-                    for p, c in data["piece_usage"].items()
-                }
-            }
 
         return {
-            "summary": report["overall"],
-            "modes": final_by_mode
+            "total_games": len(raw_games),
+            "overall": self._format_overall(overall_metrics),
+            "modes": modes_formatted,
+            "verdict": self._generate_verdict(overall_metrics, modes_metrics),
         }
+
+    # --- Raw metric collection -----------------------------------------------
+
+    def _calculate_overall(self, raw_games: list[dict[str, Any]]) -> dict[str, Any]:
+        wins = sum(1 for g in raw_games if g.get("user_result") == "win")
+        losses = sum(1 for g in raw_games if g.get("user_result") == "loss")
+        draws = sum(1 for g in raw_games if g.get("user_result") == "draw")
+        total = len(raw_games)
+
+        return {
+            "total": total,
+            "wins": wins,
+            "losses": losses,
+            "draws": draws,
+            "win_rate": round((wins / total) * 100, 1) if total else 0.0,
+        }
+
+    def _calculate_modes(self, raw_games: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for game in raw_games:
+            mode = game.get("time_class") or "unknown"
+            buckets[mode].append(game)
+
+        modes_metrics: dict[str, dict[str, Any]] = {}
+        for mode, games in buckets.items():
+            total = len(games)
+            wins = sum(1 for g in games if g.get("user_result") == "win")
+            losses = sum(1 for g in games if g.get("user_result") == "loss")
+            draws = sum(1 for g in games if g.get("user_result") == "draw")
+
+            user_ratings = [g["user_rating"] for g in games if g.get("user_rating") is not None]
+            peer_ratings = [g["opponent_rating"] for g in games if g.get("opponent_rating") is not None]
+
+            avg_rating = round(sum(user_ratings) / len(user_ratings), 0) if user_ratings else 0.0
+            avg_peer_rating = round(sum(peer_ratings) / len(peer_ratings), 0) if peer_ratings else 0.0
+
+            avg_peer_accuracy, avg_peer_accuracy_source = self._resolve_peer_accuracy(mode, avg_rating)
+
+            modes_metrics[mode] = {
+                "total": total,
+                "wins": wins,
+                "losses": losses,
+                "draws": draws,
+                "win_rate": round((wins / total) * 100, 1) if total else 0.0,
+                "avg_rating": avg_rating,
+                "avg_peer_rating": avg_peer_rating,
+                "avg_peer_accuracy": avg_peer_accuracy,
+                "avg_peer_accuracy_source": avg_peer_accuracy_source,
+            }
+
+        return modes_metrics
+
+    def _resolve_peer_accuracy(self, time_class: str, rating: float) -> tuple[float, str]:
+        """
+        Tries the real, measured community benchmark first; falls back to the
+        estimated curve only if there isn't enough real data yet for this
+        time_class/rating bucket.
+        """
+        if rating > 0:
+            real_value = RatingAccuracySample.benchmark_for(
+                time_class=time_class, rating=int(rating), rating_window=BENCHMARK_RATING_WINDOW
+            )
+            if real_value is not None:
+                return real_value, "actual"
+
+        return self._estimate_peer_accuracy(rating), "estimated"
+
+    @staticmethod
+    def _estimate_peer_accuracy(rating: float) -> float:
+        """Linear interpolation over RATING_ACCURACY_CURVE. See module docstring."""
+        if rating <= 0:
+            return RATING_ACCURACY_CURVE[0][1]
+
+        curve = RATING_ACCURACY_CURVE
+        if rating <= curve[0][0]:
+            return curve[0][1]
+        if rating >= curve[-1][0]:
+            return curve[-1][1]
+
+        for (low_rating, low_acc), (high_rating, high_acc) in zip(curve, curve[1:]):
+            if low_rating <= rating <= high_rating:
+                span = high_rating - low_rating
+                progress = (rating - low_rating) / span if span else 0
+                return round(low_acc + (high_acc - low_acc) * progress, 1)
+
+        return curve[-1][1]
+
+    # --- Formatting ------------------------------------------------------------
+
+    def _format_overall(self, metrics: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "total_games": metrics["total"],
+            "wins": metrics["wins"],
+            "losses": metrics["losses"],
+            "draws": metrics["draws"],
+            "win_rate": metrics["win_rate"],
+            "visual": MetricVisualizer.get_bars(metrics["win_rate"], self.WIN_RATE_BENCHMARK, "default"),
+        }
+
+    def _format_mode(self, metrics: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "total_games": metrics["total"],
+            "wins": metrics["wins"],
+            "losses": metrics["losses"],
+            "draws": metrics["draws"],
+            "win_rate": metrics["win_rate"],
+            "avg_rating": metrics["avg_rating"],
+            "avg_peer_rating": metrics["avg_peer_rating"],
+            "avg_peer_accuracy": metrics["avg_peer_accuracy"],
+            "avg_peer_accuracy_source": metrics["avg_peer_accuracy_source"],
+            "visual": MetricVisualizer.get_bars(metrics["win_rate"], self.WIN_RATE_BENCHMARK, "default"),
+        }
+
+    # --- Verdict -----------------------------------------------------------------
+
+    def _generate_verdict(
+        self, overall: dict[str, Any], modes: dict[str, dict[str, Any]]
+    ) -> list[str]:
+        """Builds 3 verdicts: weak spot, strong spot, advice (same pattern as the other engines)."""
+        messages: list[str] = []
+
+        modes_with_volume = {m: d for m, d in modes.items() if d["total"] >= 3}
+
+        if modes_with_volume:
+            worst_mode, worst_data = min(modes_with_volume.items(), key=lambda kv: kv[1]["win_rate"])
+            messages.append(
+                f"In {worst_mode}, your win rate is only {worst_data['win_rate']}% "
+                f"({worst_data['wins']}/{worst_data['total']}), which makes it the weakest area in your profile."
+            )
+        else:
+            messages.append("There are not enough games in a single time control to identify a clear weak spot.")
+
+        if modes_with_volume:
+            best_mode, best_data = max(modes_with_volume.items(), key=lambda kv: kv[1]["win_rate"])
+            messages.append(
+                f"Your strongest time control is {best_mode} with a win rate of {best_data['win_rate']}%."
+            )
+        else:
+            messages.append(f"Your overall win rate is {overall['win_rate']}%.")
+
+        if overall["total"] < 20:
+            messages.append("The game sample is small, so accuracy will improve as more history is collected.")
+        elif modes_with_volume and len(modes_with_volume) > 1:
+            messages.append(
+                "Focus on one or two time controls to build more consistent results faster."
+            )
+        else:
+            messages.append("Keep playing at your current pace — your results are stable.")
+
+        return messages

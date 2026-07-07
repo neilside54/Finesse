@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -25,7 +26,7 @@ SECRET_KEY = 'django-insecure-u#9^$q$#)%xd$xq2=2b^by=$cr6(g4a56)k2p+j2=&o7_+18wv
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
 
 # Application definition
@@ -37,14 +38,24 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.sites',
 
     #utilities
     'corsheaders',
 
-    #apps
+    #auth
+    'allauth',
+    'allauth.account',
+    'allauth.socialaccount',
+    'allauth.socialaccount.providers.google',
+    'allauth.socialaccount.providers.lichess',
 
+    #apps
+    'accounts',
     'analyzer',
 ]
+
+SITE_ID = 1
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -55,6 +66,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'allauth.account.middleware.AccountMiddleware',
 ]
 
 ROOT_URLCONF = 'chessslizer.urls'
@@ -123,6 +135,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -131,10 +144,91 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CORS_ALLOW_ALL_ORIGINS = True
 
-# Настройки Celery и Redis
-CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
-CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'
+# Allow the Vite dev server origin for CSRF checks during local development
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        'CSRF_TRUSTED_ORIGINS',
+        'http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000',
+    ).split(',')
+    if origin.strip()
+]
+
+# ── Celery and Redis settings ─────────────────────────────────────────
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/0')
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', REDIS_URL)
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', REDIS_URL)
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': os.environ.get('CACHES_DEFAULT_LOCATION', REDIS_URL.replace('/0', '/1')),
+    }
+}
+
+# How long a completed analysis report stays cached, in seconds.
+# Split by analysis type so cheap stats-only reports refresh faster
+# while expensive Stockfish results stay cached for a full day.
+REPORT_CACHE_TTL_SECONDS = 60 * 60          # 1 hour  — sync stats-only endpoint
+STOCKFISH_CACHE_TTL_SECONDS = 60 * 60 * 24  # 24 hours — async Stockfish analysis
+
+# ── django-allauth configuration ──────────────────────────────────────
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+    'allauth.account.auth_backends.AuthenticationBackend',
+]
+
+# Social login flows directly — no email confirmation gate
+ACCOUNT_LOGIN_METHODS = {'username', 'email'}
+ACCOUNT_EMAIL_VERIFICATION = 'none'
+ACCOUNT_LOGIN_ON_EMAIL_CONFIRMATION = True
+ACCOUNT_LOGOUT_ON_GET = True
+ACCOUNT_SESSION_REMEMBER = True
+
+# Social providers — placeholders replaced by env vars in production
+SOCIALACCOUNT_PROVIDERS = {
+    'google': {
+        'SCOPE': ['profile', 'email'],
+    },
+    'lichess': {
+        'SCOPE': [],
+        'QUERY_EMAIL': True,
+    },
+}
+# NOTE: OAuth credentials (client_id / secret) are configured via the
+# SocialApp entries in the database (Django admin). Do NOT add 'APP'
+# configs here — allauth merges DB + settings apps, causing a
+# MultipleObjectsReturned error when both sources exist.
+
+# Stockfish engine path — set via env var in Docker, fallback to system PATH
+STOCKFISH_PATH = os.environ.get(
+    'STOCKFISH_PATH',
+    str(BASE_DIR / 'engines' / 'stockfish.exe'),
+)
+
+# After social login, redirect to the frontend SPA
+# In dev, the frontend runs on port 5173; in production, set via env var.
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
+LOGIN_REDIRECT_URL = FRONTEND_URL + '/'
+ACCOUNT_LOGOUT_REDIRECT_URL = FRONTEND_URL + '/login'
+
+# Cookie domain so the session cookie works across dev ports (5173 ↔ 8000).
+# In production, set SESSION_COOKIE_DOMAIN to your actual domain.
+if DEBUG:
+    SESSION_COOKIE_DOMAIN = 'localhost'
+    CSRF_COOKIE_DOMAIN = 'localhost'
+
+# Custom user model — must be set before running the first migration.
+AUTH_USER_MODEL = 'accounts.User'
+
+# ── Celery Beat: periodic task schedule ───────────────────────────────
+CELERY_BEAT_SCHEDULE = {
+    'cleanup-expired-sessions': {
+        'task': 'analyzer.tasks.cleanup_expired_sessions',
+        'schedule': 3600.0,  # every hour
+    },
+}
