@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChessSlizer</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f3f4f6; color: #1f2937; margin: 0; padding: 0; }
+        .page { max-width: 960px; margin: 0 auto; padding: 24px; }
+        .card { background: white; border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); }
+        .section-title { margin-top: 0; }
+        .button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: none; border-radius: 10px; padding: 12px 18px; cursor: pointer; font-size: 14px; font-weight: 600; }
+        .button-primary { background: #2563eb; color: white; }
+        .button-secondary { background: #e5e7eb; color: #111827; }
+        .button.active { box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18); }
+        .input-row { display: grid; gap: 12px; margin-bottom: 16px; }
+        label { display: block; font-size: 13px; margin-bottom: 6px; font-weight: 600; }
+        input[type="text"], select, textarea { width: 100%; padding: 12px 14px; border: 1px solid #d1d5db; border-radius: 12px; font-size: 14px; }
+        .hero { display: grid; gap: 10px; }
+        .result-block { white-space: pre-wrap; background: #111827; color: #f9fafb; padding: 18px; border-radius: 14px; overflow-x: auto; max-height: 420px; }
+        .hidden { display: none; }
+        .hint { font-size: 13px; color: #6b7280; }
+    </style>
+</head>
+<body>
+<div class="page">
+    <div class="card hero">
+        <h1>ChessSlizer</h1>
+        <p>Analyze a username from Lichess or Chess.com, or upload a PGN file. Results appear as structured JSON output.</p>
+    </div>
+
+    <div class="card">
+        <h2 class="section-title">Choose analysis mode</h2>
+        <div>
+            <button id="modeNickname" class="button button-primary active">Username</button>
+            <button id="modePGN" class="button button-secondary">PGN file</button>
+        </div>
+    </div>
+
+    <div id="usernameCard" class="card">
+        <h2 class="section-title">Username analysis</h2>
+        <div class="input-row">
+            <label for="usernameInput">Username</label>
+            <input id="usernameInput" type="text" placeholder="Enter Lichess or Chess.com username">
+        </div>
+        <div class="input-row">
+            <label for="platformSelect">Platform</label>
+            <select id="platformSelect">
+                <option value="lichess">Lichess</option>
+                <option value="chess.com">Chess.com</option>
+            </select>
+        </div>
+        <button id="submitUsername" class="button button-primary">Analyze username</button>
+    </div>
+
+    <div id="pgnCard" class="card hidden">
+        <h2 class="section-title">PGN analysis</h2>
+        <div class="hint">Upload a PGN file, paste PGN text, or drag/drop a file into the box.</div>
+        <div class="input-row">
+            <textarea id="pgnInput" rows="8" placeholder="Paste PGN text here"></textarea>
+        </div>
+        <div class="input-row">
+            <input id="pgnFile" type="file" accept=".pgn,text/plain">
+        </div>
+        <button id="submitPGN" class="button button-primary">Analyze PGN</button>
+    </div>
+
+    <div class="card">
+        <h2 class="section-title">Result</h2>
+        <div id="resultOutput" class="result-block">No analysis run yet.</div>
+    </div>
+</div>
+
+<script>
+const modeNickname = document.getElementById('modeNickname');
+const modePGN = document.getElementById('modePGN');
+const usernameCard = document.getElementById('usernameCard');
+const pgnCard = document.getElementById('pgnCard');
+const resultOutput = document.getElementById('resultOutput');
+const usernameInput = document.getElementById('usernameInput');
+const platformSelect = document.getElementById('platformSelect');
+const pgnInput = document.getElementById('pgnInput');
+const pgnFile = document.getElementById('pgnFile');
+const submitUsername = document.getElementById('submitUsername');
+const submitPGN = document.getElementById('submitPGN');
+
+function setMode(mode) {
+    if (mode === 'username') {
+        usernameCard.classList.remove('hidden');
+        pgnCard.classList.add('hidden');
+        modeNickname.classList.add('active');
+        modePGN.classList.remove('active');
+    } else {
+        usernameCard.classList.add('hidden');
+        pgnCard.classList.remove('hidden');
+        modeNickname.classList.remove('active');
+        modePGN.classList.add('active');
+    }
+}
+
+async function fetchAnalysis(payload, isPGN) {
+    resultOutput.textContent = 'Running analysis...';
+    try {
+        const response = await fetch('/api/analyze/', {
+            method: 'POST',
+            body: isPGN ? payload : JSON.stringify(payload),
+            headers: isPGN ? {} : {'Content-Type': 'application/json'}
+        });
+        const data = await response.json();
+        resultOutput.textContent = JSON.stringify(data, null, 2);
+    } catch (error) {
+        resultOutput.textContent = 'Request failed: ' + error;
+    }
+}
+
+modeNickname.onclick = () => setMode('username');
+modePGN.onclick = () => setMode('pgn');
+
+submitUsername.onclick = () => {
+    const username = usernameInput.value.trim();
+    if (!username) {
+        resultOutput.textContent = 'Please enter a username.';
+        return;
+    }
+    const platform = platformSelect.value;
+    fetchAnalysis({username, platform, limit: 100}, false);
+};
+
+submitPGN.onclick = async () => {
+    const text = pgnInput.value.trim();
+    const file = pgnFile.files[0];
+    if (!text && !file) {
+        resultOutput.textContent = 'Paste PGN text or select a PGN file.';
+        return;
+    }
+    if (file) {
+        const formData = new FormData();
+        formData.append('pgn_file', file);
+        await fetchAnalysis(formData, true);
+        return;
+    }
+    const formData = new FormData();
+    formData.append('pgn', text);
+    await fetchAnalysis(formData, true);
+};
+
+window.addEventListener('dragover', (event) => {
+    event.preventDefault();
+});
+window.addEventListener('drop', async (event) => {
+    event.preventDefault();
+    const file = event.dataTransfer.files[0];
+    if (file && file.name.endsWith('.pgn')) {
+        pgnFile.files = event.dataTransfer.files;
+        setMode('pgn');
+    }
+});
+</script>
+</body>
+</html>

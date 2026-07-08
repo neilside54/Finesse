@@ -1,0 +1,554 @@
+import asyncio
+import inspect
+import logging
+import os
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+import chess.engine
+from django.conf import settings
+
+from analyzer.models import RatingAccuracySample
+from analyzer.services.chess_api import ChessAPIClient
+from analyzer.services.game_evaluator import GameEvaluator
+from analyzer.services.opening_engine import ChessOpeningEngine
+from analyzer.services.phase_engine import ChessPhaseEngine
+from analyzer.services.piece_engine import ChessPieceEngine
+from analyzer.services.skills_engine import ChessSkillsEngine
+from analyzer.services.stats_engine import ChessStatsEngine
+from analyzer.services.time_engine import ChessTimeEngine
+
+
+class ChessAnalysisPipeline:
+    """Coordinates the full analysis flow with safer startup and graceful degradation."""
+
+    def __init__(
+        self,
+        api_client: ChessAPIClient | None = None,
+        stats_engine: ChessStatsEngine | None = None,
+        opening_engine: ChessOpeningEngine | None = None,
+        skills_engine: ChessSkillsEngine | None = None,
+        time_engine: ChessTimeEngine | None = None,
+        phase_engine: ChessPhaseEngine | None = None,
+        piece_engine: ChessPieceEngine | None = None,
+        game_evaluator: GameEvaluator | None = None,
+        engine_factory: Callable[[str], Any] | None = None,
+        stockfish_path: str | os.PathLike[str] | None = None,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        self.api_client = api_client or ChessAPIClient()
+        self.stats_engine = stats_engine or ChessStatsEngine()
+        self.opening_engine = opening_engine or ChessOpeningEngine()
+        self.skills_engine = skills_engine or ChessSkillsEngine()
+        self.time_engine = time_engine or ChessTimeEngine()
+        self.phase_engine = phase_engine or ChessPhaseEngine()
+        self.piece_engine = piece_engine or ChessPieceEngine()
+        self.game_evaluator = game_evaluator or GameEvaluator()
+        self.engine_factory = engine_factory or self._default_engine_factory
+        self.stockfish_path = stockfish_path
+        self.logger = logger or logging.getLogger(__name__)
+
+    def run_analysis(
+        self,
+        username: Optional[str],
+        platform: str,
+        limit: int,
+        pgn_text: Optional[str] = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Run the full analysis pipeline.
+
+        If *progress_callback* is provided it is called periodically with a
+        dict like ``{"phase": str, "current": int, "total": int, "message": str}``
+        so that the caller (typically a Celery task) can broadcast real progress
+        to the frontend.
+        """
+        def _emit(phase: str, current: int, total: int, message: str) -> None:
+            if progress_callback:
+                progress_callback({
+                    "phase": phase,
+                    "current": current,
+                    "total": total,
+                    "message": message,
+                })
+
+        _emit("fetching", 0, 1, "Fetching games from API...")
+
+        try:
+            games_result = self.api_client.get_games(
+                username=username,
+                platform=platform,
+                limit=limit,
+                pgn_text=pgn_text,
+            )
+            if inspect.isawaitable(games_result):
+                raw_games = asyncio.run(games_result)
+            else:
+                raw_games = games_result
+        except Exception as exc:
+            return {"status": "error", "error": f"Failed to fetch games: {exc}"}
+
+        if not raw_games:
+            return {"error": "No games found"}
+
+        _emit("fetching", 1, 1, f"Fetched {len(raw_games)} game(s). Preparing Stockfish...")
+
+        engine_path = self._resolve_engine_path()
+        if not engine_path:
+            return {
+                "status": "error",
+                "error": (
+                    "Stockfish engine not found. Expected one of: "
+                    f"{', '.join(self._candidate_engine_paths())}"
+                ),
+            }
+
+        errors: list[str] = []
+        piece_telemetry: dict[str, Any] = {}
+        blunders_report: list[dict[str, Any]] = []
+        blunder_summaries: list[dict[str, Any]] = []
+        skills_report: dict[str, Any] = {}
+        phase_telemetry: dict[str, Any] = {}
+
+        try:
+            with self.engine_factory(engine_path) as engine:
+                # ── SINGLE STOCKFISH PASS ──────────────────────────────
+                # Evaluate every game once. Each trace stores eval_after,
+                # best_move_uci, played_uci, san, piece_symbol, is_best_move.
+                # All downstream engines (skills, pieces, phases, blunders)
+                # derive their metrics from these traces — no redundant
+                # engine.analyse() calls.
+                _emit("analyzing", 0, len(raw_games), f"Evaluating {len(raw_games)} game(s) with Stockfish...")
+
+                game_data: list[tuple[dict[str, Any], Any]] = []
+                for idx, game in enumerate(raw_games, 1):
+                    try:
+                        _emit(
+                            "analyzing",
+                            idx,
+                            len(raw_games),
+                            f"Analyzing game {idx}/{len(raw_games)}...",
+                        )
+                        trace = self.game_evaluator.evaluate(
+                            game.get("pgn"),
+                            engine,
+                            user_color=game.get("user_color", "white"),
+                            time_limit=0.05,
+                        )
+                        game_data.append((game, trace))
+                    except Exception as exc:
+                        self.logger.warning(
+                            "Evaluation failed for %s: %s", game.get("game_id"), exc
+                        )
+                        errors.append(
+                            f"Evaluation failed for game {game.get('game_id')}: {exc}"
+                        )
+                        game_data.append((game, None))
+
+                _emit("metrics", 0, 4, "Deriving piece accuracy...")
+
+                # ── Derive all metrics from traces (no Stockfish calls) ──
+
+                piece_telemetry = self._safe_call(
+                    "piece analysis",
+                    lambda: self.piece_engine.analyze_from_traces(game_data),
+                    errors,
+                    default={},
+                )
+
+                for game, trace in game_data[:10]:
+                    if trace is None:
+                        continue
+                    try:
+                        opponent_name = game.get("opponent_name", "Unknown")
+                        user_color = game.get("user_color", "white")
+                        top_blunders, summary = trace.blunders_for(
+                            user_color, opponent_name=opponent_name
+                        )
+                        blunders_report.extend(top_blunders)
+                        blunder_summaries.append(summary)
+                    except Exception as exc:
+                        self.logger.warning(
+                            "Blunder detection failed for %s: %s",
+                            game.get("game_id"), exc,
+                        )
+                        errors.append(
+                            f"Blunder detection failed for game {game.get('game_id')}: {exc}"
+                        )
+
+                skills_report = self._safe_call(
+                    "skills analysis",
+                    lambda: self.skills_engine.analyze_skills_from_traces(
+                        game_data[:10], username=username
+                    ),
+                    errors,
+                    default={},
+                )
+                self._persist_accuracy_samples(skills_report, platform, errors)
+
+                phase_telemetry = self._safe_call(
+                    "phase analysis",
+                    lambda: self.phase_engine.analyze_from_traces(game_data),
+                    errors,
+                    default={},
+                )
+
+        except FileNotFoundError as exc:
+            return {"status": "error", "error": f"Stockfish engine not found: {exc}"}
+        except OSError as exc:
+            return {"status": "error", "error": f"Failed to launch Stockfish: {exc}"}
+        except Exception as exc:
+            return {"status": "error", "error": f"Stockfish analysis failed: {exc}"}
+
+        _emit("stats", 0, 3, "Computing profile statistics...")
+
+        base_report = self._safe_call(
+            "profile statistics",
+            lambda: self.stats_engine.analyze_profile(raw_games, username=username),
+            errors,
+            default={},
+        )
+        _emit("stats", 1, 3, "Analyzing openings...")
+
+        opening_report = self._safe_call(
+            "opening analysis",
+            lambda: self.opening_engine.analyze_openings(raw_games, username=username),
+            errors,
+            default={},
+        )
+        _emit("stats", 2, 3, "Analyzing time management...")
+
+        time_report = self._safe_call(
+            "time analysis",
+            lambda: self.time_engine.analyze_time(raw_games, username=username),
+            errors,
+            default={},
+        )
+
+        if not isinstance(base_report, dict):
+            base_report = {}
+        if not isinstance(opening_report, dict):
+            opening_report = {}
+        if not isinstance(time_report, dict):
+            time_report = {}
+        if not isinstance(skills_report, dict):
+            skills_report = {}
+        if not isinstance(phase_telemetry, dict):
+            phase_telemetry = {}
+        if not isinstance(piece_telemetry, dict):
+            piece_telemetry = {}
+
+        # ── Assemble final report ─────────────────────────────────────
+        snapshot = self._build_snapshot(
+            skills_report, base_report, blunder_summaries, raw_games
+        )
+        highlights = self._build_highlights(
+            skills_report, piece_telemetry, phase_telemetry, base_report
+        )
+        summary = self._build_summary(
+            skills_report, base_report, highlights, raw_games
+        )
+        sections = self._build_analysis_sections(
+            skills_report=skills_report,
+            opening_report=opening_report,
+            time_report=time_report,
+            phase_telemetry=phase_telemetry,
+            piece_telemetry=piece_telemetry,
+            base_report=base_report,
+        )
+
+        status = "ok" if not errors else "partial"
+
+        return {
+            "status": status,
+            "snapshot": snapshot,
+            "summary": summary,
+            "highlights": highlights,
+            "sections": sections,
+            "blunders": blunders_report,
+            "blunder_summaries": blunder_summaries,
+            "skills_telemetry": skills_report,
+            "phase_telemetry": phase_telemetry,
+            "piece_telemetry": piece_telemetry,
+            "opening_stats": opening_report,
+            "time_report": time_report,
+            "general_stats": base_report,
+            "user_info": {
+                "username": username,
+                "platform": platform,
+            },
+            "warnings": [
+                w for w in [
+                    f"{len(errors)} game(s) had analysis errors." if errors else None,
+                    "Game sample is small — accuracy will improve with more history."
+                    if len(raw_games) < 20 else None,
+                ]
+                if w is not None
+            ],
+            "errors": errors,
+        }
+
+    # ── Snapshot ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_snapshot(
+        skills_report: dict,
+        base_report: dict,
+        blunder_summaries: list,
+        raw_games: list,
+    ) -> dict:
+        skills = skills_report.get("overall", {})
+        stats = base_report.get("overall", {})
+        total = skills.get("total_games_analyzed", 0)
+        panic = (
+            sum(s.get("panic_rate", 0) for s in blunder_summaries)
+            / len(blunder_summaries)
+            if blunder_summaries
+            else 0.0
+        )
+        peer_acc = skills.get("peer_accuracy")
+        return {
+            "accuracy": skills.get("avg_accuracy", 0),
+            "win_rate": stats.get("win_rate", 0),
+            "resourcefulness": skills.get("avg_resourcefulness", 0),
+            "conversion": skills.get("avg_conversion", 0),
+            "panic_rate": round(panic, 1),
+            "total_games": total,
+            "peer_accuracy": peer_acc.get("value") if isinstance(peer_acc, dict) else peer_acc,
+        }
+
+    # ── Highlights ───────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_highlights(
+        skills_report: dict,
+        piece_telemetry: dict,
+        phase_telemetry: dict,
+        base_report: dict,
+    ) -> list[dict[str, Any]]:
+        highlights: list[dict[str, Any]] = []
+
+        # Accuracy highlight
+        skills_overall = skills_report.get("overall", {})
+        avg_acc = skills_overall.get("avg_accuracy")
+        peer_acc = skills_overall.get("peer_accuracy")
+        if avg_acc is not None:
+            peer_val = peer_acc.get("value") if isinstance(peer_acc, dict) else peer_acc
+            highlights.append({
+                "title": "Overall Accuracy",
+                "value": f"{avg_acc}%",
+                "peer_average": f"{peer_val}%" if peer_val else None,
+            })
+
+        # Weakest piece
+        pieces = piece_telemetry.get("metrics", [])
+        if pieces:
+            weakest = min(pieces, key=lambda m: m.get("value", 100))
+            highlights.append({
+                "title": f"Weakest Piece: {weakest.get('name', '?')}",
+                "value": f"{weakest.get('value', 0)}%",
+                "peer_average": f"{weakest.get('peer_average', 0)}%",
+            })
+
+        # Weakest phase
+        phases = phase_telemetry.get("metrics", [])
+        if phases:
+            weakest_phase = min(phases, key=lambda m: m.get("value", 99))
+            highlights.append({
+                "title": f"Weakest Phase: {weakest_phase.get('name', '?')}",
+                "value": f"{weakest_phase.get('value', 0)} pawns",
+                "peer_average": f"{weakest_phase.get('peer_average', 0)} pawns",
+            })
+
+        # Win rate
+        win_rate = base_report.get("overall", {}).get("win_rate")
+        if win_rate is not None:
+            highlights.append({
+                "title": "Win Rate",
+                "value": f"{win_rate}%",
+            })
+
+        return highlights
+
+    # ── Summary ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_summary(
+        skills_report: dict,
+        base_report: dict,
+        highlights: list,
+        raw_games: list,
+    ) -> dict:
+        skills_overall = skills_report.get("overall", {})
+        avg_acc = skills_overall.get("avg_accuracy", 0)
+        peer_acc = skills_overall.get("peer_accuracy")
+        peer_val = peer_acc.get("value") if isinstance(peer_acc, dict) else peer_acc
+        peer_source = (
+            peer_acc.get("source", "estimated")
+            if isinstance(peer_acc, dict)
+            else "estimated"
+        )
+        win_rate = base_report.get("overall", {}).get("win_rate", 0)
+
+        # Determine priority area
+        priority_label = None
+        pieces = skills_report.get("by_piece", {})
+        if pieces:
+            weakest_piece = min(pieces, key=lambda k: pieces[k].get("accuracy", 100))
+            priority_label = f"{weakest_piece} accuracy"
+
+        if avg_acc and peer_val and avg_acc < peer_val - 3:
+            summary_text = (
+                f"Your average accuracy is {avg_acc}%, which is below the peer "
+                f"benchmark of {peer_val}%. Focus on reducing blunders and "
+                f"improving calculation in complex positions."
+            )
+        elif avg_acc and peer_val and avg_acc > peer_val + 3:
+            summary_text = (
+                f"Strong play — your {avg_acc}% accuracy exceeds the peer "
+                f"average of {peer_val}%. Keep pushing your conversion rate "
+                f"to turn more advantages into wins."
+            )
+        else:
+            summary_text = (
+                f"Solid performance at {avg_acc}% accuracy, right in line with "
+                f"your peers at {peer_val}%. Your win rate is {win_rate}%. "
+                f"Keep grinding to find consistent edges."
+            )
+
+        return {
+            "summary_text": summary_text,
+            "priority_label": priority_label,
+            "peer_accuracy_source": peer_source,
+        }
+
+    # ── Sections ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_analysis_sections(
+        skills_report: dict,
+        opening_report: dict,
+        time_report: dict,
+        phase_telemetry: dict,
+        piece_telemetry: dict,
+        base_report: dict,
+    ) -> list[dict[str, Any]]:
+        sections: list[dict[str, Any]] = []
+
+        # Skills section
+        if skills_report:
+            metrics = []
+            for key in ("avg_accuracy", "avg_resourcefulness", "avg_conversion"):
+                label = key.replace("avg_", "").capitalize()
+                value = skills_report.get("overall", {}).get(key, 0)
+                peer = skills_report.get("overall", {}).get(f"peer_{key.replace('avg_', '')}")
+                peer_val = peer.get("value") if isinstance(peer, dict) else peer
+                peer_src = peer.get("source") if isinstance(peer, dict) else None
+                metrics.append({
+                    "name": label,
+                    "value": value,
+                    "peer_average": peer_val,
+                    "peer_source": peer_src,
+                })
+            if metrics:
+                sections.append({"id": "skills", "metrics": metrics})
+
+        # Openings section
+        if opening_report:
+            sections.append({"id": "openings", **opening_report})
+
+        # Time management section
+        if time_report:
+            sections.append({"id": "time_management", **time_report})
+
+        # Game phases section
+        if phase_telemetry:
+            sections.append({"id": "game_phases", **phase_telemetry})
+
+        # Piece accuracy section
+        if piece_telemetry:
+            sections.append({"id": "pieces", **piece_telemetry})
+
+        # General stats section
+        if base_report:
+            sections.append({"id": "general_stats", **base_report})
+
+        return sections
+
+    # ── Accuracy persistence ─────────────────────────────────────────
+
+    def _persist_accuracy_samples(
+        self,
+        skills_report: dict,
+        platform: str,
+        errors: list[str],
+    ) -> None:
+        """Save measured accuracy samples to the DB for community benchmarks."""
+        for game_entry in skills_report.get("games", []):
+            try:
+                opp_rating = game_entry.get("opponent_rating")
+                opp_accuracy = game_entry.get("opponent_accuracy")
+                time_class = game_entry.get("time_class", "unknown")
+                if opp_rating and opp_accuracy:
+                    RatingAccuracySample.objects.create(
+                        rating=opp_rating,
+                        accuracy=opp_accuracy,
+                        time_class=time_class,
+                        platform=platform,
+                    )
+            except Exception as exc:
+                errors.append(f"Failed to persist accuracy sample: {exc}")
+
+    # ── Safe call wrapper ────────────────────────────────────────────
+
+    def _safe_call(
+        self,
+        name: str,
+        fn: Callable,
+        errors: list[str],
+        default: Any = None,
+    ) -> Any:
+        """Run *fn*, catching exceptions and appending to *errors*."""
+        try:
+            return fn()
+        except Exception as exc:
+            self.logger.warning("%s failed: %s", name, exc)
+            errors.append(f"{name} failed: {exc}")
+            return default
+
+    # ── Engine path resolution ───────────────────────────────────────
+
+    def _resolve_engine_path(self) -> Optional[str]:
+        if self.stockfish_path and Path(self.stockfish_path).is_file():
+            return str(self.stockfish_path)
+
+        # Django settings
+        sf_path = getattr(settings, "STOCKFISH_PATH", None)
+        if sf_path and Path(sf_path).is_file():
+            return str(sf_path)
+
+        # Try candidate paths
+        for candidate in self._candidate_engine_paths():
+            if Path(candidate).is_file():
+                return candidate
+
+        return None
+
+    @staticmethod
+    def _candidate_engine_paths() -> list[str]:
+        project_root = Path(__file__).resolve().parent.parent.parent
+        return [
+            str(project_root / "engines" / "stockfish"),
+            str(project_root / "engines" / "stockfish.exe"),
+            "/usr/local/bin/stockfish",
+            "/usr/bin/stockfish",
+            "stockfish",
+        ]
+
+    # ── Default engine factory ───────────────────────────────────────
+
+    @staticmethod
+    def _default_engine_factory(engine_path: str):
+        """Context manager that launches Stockfish and yields the engine."""
+        return chess.engine.SimpleEngine.popen_uci(engine_path)

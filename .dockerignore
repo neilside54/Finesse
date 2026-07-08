@@ -1,0 +1,25 @@
+.git
+.gitignore
+.venv
+venv
+env
+__pycache__
+*.pyc
+*.pyo
+*.sqlite3
+db.sqlite3
+.env
+.env.*
+!.env.example
+.idea
+.vscode
+*.log
+celerybeat-schedule
+node_modules
+dist
+Finesse web app design/node_modules
+Finesse web app design/dist
+.myollamaenhancer
+Thumbs.db
+Desktop.ini
+*.swp

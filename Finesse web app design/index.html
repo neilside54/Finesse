@@ -1,0 +1,30 @@
+  <!DOCTYPE html>
+  <html lang="en">
+    <head>
+      
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>Finesse — Chess Analysis</title>
+      <meta name="description" content="Analyze chess games via username or PGN upload with detailed insights on accuracy, openings, blunders, and peer comparisons for players of all levels." />
+      <meta name="robots" content="noindex, nofollow" />
+      <style>html, body { height: 100%; margin: 0; } #root { height: 100%; }</style>
+      <!-- Prevent flash of wrong theme on load -->
+      <script>
+        (function() {
+          var t = localStorage.getItem('finesse-theme');
+          var dark = false;
+          if (t === 'dark') { dark = true; }
+          else if (t === 'light') { dark = false; }
+          else { dark = window.matchMedia('(prefers-color-scheme: dark)').matches; }
+          if (dark) { document.documentElement.classList.add('dark'); }
+        })();
+      </script>
+    </head>
+
+    <body>
+      
+      <div id="root"></div>
+      <script type="module" src="/src/main.tsx"></script>
+      
+    </body>
+  </html>
