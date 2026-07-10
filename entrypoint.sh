@@ -3,6 +3,19 @@ set -e
 
 echo "Chesslizer entrypoint — SERVICE=${SERVICE:-web}"
 
+# ── Wait for PostgreSQL (when DATABASE_URL is set) ────────────────────
+if [ -n "$DATABASE_URL" ]; then
+  echo "Waiting for PostgreSQL..."
+  for i in $(seq 1 30); do
+    if python -c "import psycopg2; psycopg2.connect('${DATABASE_URL}')" 2>/dev/null; then
+      echo "PostgreSQL is ready."
+      break
+    fi
+    echo "  ...attempt $i/30"
+    sleep 2
+  done
+fi
+
 # Run migrations on every startup (safe for SQLite and PostgreSQL)
 python manage.py migrate --noinput 2>/dev/null || true
 

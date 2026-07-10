@@ -23,12 +23,14 @@ FROM python:3.13-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Install system dependencies: Stockfish, build tools
+# Install system dependencies: Stockfish, PostgreSQL client, build tools
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         stockfish \
         gcc \
         libffi-dev \
+        libpq-dev \
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Verify Stockfish is installed and findable

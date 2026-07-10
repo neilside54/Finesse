@@ -51,9 +51,9 @@ export function MetricBar({
             {typeof value === "number" ? value.toFixed(1) : value}
             {suffix}
           </span>
-          {peerValue !== undefined && (
+          {peerValue != null && (
             <span className="text-xs text-[#A89070] tabular-nums">
-              vs {peerValue.toFixed(1)}
+              vs {peerValue!.toFixed(1)}
               {suffix}
               {peerSource === "estimated" && (
                 <span className="ml-0.5 italic">(est.)</span>

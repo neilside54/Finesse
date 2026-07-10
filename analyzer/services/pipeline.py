@@ -16,7 +16,6 @@ from analyzer.services.phase_engine import ChessPhaseEngine
 from analyzer.services.piece_engine import ChessPieceEngine
 from analyzer.services.skills_engine import ChessSkillsEngine
 from analyzer.services.stats_engine import ChessStatsEngine
-from analyzer.services.time_engine import ChessTimeEngine
 
 
 class ChessAnalysisPipeline:
@@ -28,7 +27,6 @@ class ChessAnalysisPipeline:
         stats_engine: ChessStatsEngine | None = None,
         opening_engine: ChessOpeningEngine | None = None,
         skills_engine: ChessSkillsEngine | None = None,
-        time_engine: ChessTimeEngine | None = None,
         phase_engine: ChessPhaseEngine | None = None,
         piece_engine: ChessPieceEngine | None = None,
         game_evaluator: GameEvaluator | None = None,
@@ -40,7 +38,6 @@ class ChessAnalysisPipeline:
         self.stats_engine = stats_engine or ChessStatsEngine()
         self.opening_engine = opening_engine or ChessOpeningEngine()
         self.skills_engine = skills_engine or ChessSkillsEngine()
-        self.time_engine = time_engine or ChessTimeEngine()
         self.phase_engine = phase_engine or ChessPhaseEngine()
         self.piece_engine = piece_engine or ChessPieceEngine()
         self.game_evaluator = game_evaluator or GameEvaluator()
@@ -201,7 +198,11 @@ class ChessAnalysisPipeline:
         except Exception as exc:
             return {"status": "error", "error": f"Stockfish analysis failed: {exc}"}
 
-        _emit("stats", 0, 3, "Computing profile statistics...")
+        # ── Transform engine dicts into frontend-compat metrics arrays ─
+        piece_telemetry = self._normalize_piece_telemetry(piece_telemetry)
+        phase_telemetry = self._normalize_phase_telemetry(phase_telemetry)
+
+        _emit("stats", 0, 2, "Computing profile statistics...")
 
         base_report = self._safe_call(
             "profile statistics",
@@ -209,19 +210,11 @@ class ChessAnalysisPipeline:
             errors,
             default={},
         )
-        _emit("stats", 1, 3, "Analyzing openings...")
+        _emit("stats", 1, 2, "Analyzing openings...")
 
         opening_report = self._safe_call(
             "opening analysis",
             lambda: self.opening_engine.analyze_openings(raw_games, username=username),
-            errors,
-            default={},
-        )
-        _emit("stats", 2, 3, "Analyzing time management...")
-
-        time_report = self._safe_call(
-            "time analysis",
-            lambda: self.time_engine.analyze_time(raw_games, username=username),
             errors,
             default={},
         )
@@ -230,8 +223,6 @@ class ChessAnalysisPipeline:
             base_report = {}
         if not isinstance(opening_report, dict):
             opening_report = {}
-        if not isinstance(time_report, dict):
-            time_report = {}
         if not isinstance(skills_report, dict):
             skills_report = {}
         if not isinstance(phase_telemetry, dict):
@@ -241,7 +232,7 @@ class ChessAnalysisPipeline:
 
         # ── Assemble final report ─────────────────────────────────────
         snapshot = self._build_snapshot(
-            skills_report, base_report, blunder_summaries, raw_games
+            skills_report, base_report, raw_games
         )
         highlights = self._build_highlights(
             skills_report, piece_telemetry, phase_telemetry, base_report
@@ -252,7 +243,6 @@ class ChessAnalysisPipeline:
         sections = self._build_analysis_sections(
             skills_report=skills_report,
             opening_report=opening_report,
-            time_report=time_report,
             phase_telemetry=phase_telemetry,
             piece_telemetry=piece_telemetry,
             base_report=base_report,
@@ -272,7 +262,6 @@ class ChessAnalysisPipeline:
             "phase_telemetry": phase_telemetry,
             "piece_telemetry": piece_telemetry,
             "opening_stats": opening_report,
-            "time_report": time_report,
             "general_stats": base_report,
             "user_info": {
                 "username": username,
@@ -295,25 +284,17 @@ class ChessAnalysisPipeline:
     def _build_snapshot(
         skills_report: dict,
         base_report: dict,
-        blunder_summaries: list,
         raw_games: list,
     ) -> dict:
         skills = skills_report.get("overall", {})
         stats = base_report.get("overall", {})
         total = skills.get("total_games_analyzed", 0)
-        panic = (
-            sum(s.get("panic_rate", 0) for s in blunder_summaries)
-            / len(blunder_summaries)
-            if blunder_summaries
-            else 0.0
-        )
         peer_acc = skills.get("peer_accuracy")
         return {
             "accuracy": skills.get("avg_accuracy", 0),
             "win_rate": stats.get("win_rate", 0),
             "resourcefulness": skills.get("avg_resourcefulness", 0),
             "conversion": skills.get("avg_conversion", 0),
-            "panic_rate": round(panic, 1),
             "total_games": total,
             "peer_accuracy": peer_acc.get("value") if isinstance(peer_acc, dict) else peer_acc,
         }
@@ -429,7 +410,6 @@ class ChessAnalysisPipeline:
     def _build_analysis_sections(
         skills_report: dict,
         opening_report: dict,
-        time_report: dict,
         phase_telemetry: dict,
         piece_telemetry: dict,
         base_report: dict,
@@ -458,10 +438,6 @@ class ChessAnalysisPipeline:
         if opening_report:
             sections.append({"id": "openings", **opening_report})
 
-        # Time management section
-        if time_report:
-            sections.append({"id": "time_management", **time_report})
-
         # Game phases section
         if phase_telemetry:
             sections.append({"id": "game_phases", **phase_telemetry})
@@ -475,6 +451,57 @@ class ChessAnalysisPipeline:
             sections.append({"id": "general_stats", **base_report})
 
         return sections
+
+    # ── Telemetry normalisation ────────────────────────────────────
+
+    @staticmethod
+    def _normalize_piece_telemetry(raw: dict[str, Any]) -> dict[str, Any]:
+        """
+        Transform piece engine output from ``{P: {...raw/peer...}, N: {...}, …}``
+        to ``{metrics: [{name, value, peer_average, …}, …], verdict: …}`` so the
+        frontend can iterate over a ``metrics`` array directly.
+        """
+        symbols = {"P", "N", "B", "R", "Q", "K"}
+        metrics = [
+            {
+                "name": sym,
+                "value": data.get("raw", 0),
+                "peer_average": data.get("peer", 0),
+                "peer_source": data.get("peer_source", "estimated"),
+                "visual": data.get("visual", {}),
+            }
+            for sym, data in raw.items()
+            if sym in symbols and isinstance(data, dict) and "raw" in data
+        ]
+        verdict = raw.get("verdict", [])
+        result: dict[str, Any] = {"metrics": metrics}
+        if verdict:
+            result["verdict"] = verdict
+        return result
+
+    @staticmethod
+    def _normalize_phase_telemetry(raw: dict[str, Any]) -> dict[str, Any]:
+        """
+        Transform phase engine output from ``{opening: {...raw/peer...}, middlegame: …}``
+        to ``{metrics: [{name, value, peer_average, …}, …], verdict: …}``.
+        """
+        phases = {"opening", "middlegame", "endgame"}
+        metrics = [
+            {
+                "name": phase,
+                "value": data.get("raw", 0),
+                "peer_average": data.get("peer", 0),
+                "peer_source": data.get("peer_source", "estimated"),
+                "visual": data.get("visual", {}),
+            }
+            for phase, data in raw.items()
+            if phase in phases and isinstance(data, dict) and "raw" in data
+        ]
+        verdict = raw.get("verdict", [])
+        result: dict[str, Any] = {"metrics": metrics}
+        if verdict:
+            result["verdict"] = verdict
+        return result
 
     # ── Accuracy persistence ─────────────────────────────────────────
 
