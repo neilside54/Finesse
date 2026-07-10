@@ -6,6 +6,26 @@
 #   docker compose down            — stop all services
 
 services:
+  # ── PostgreSQL (production database) ────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: finesse
+      POSTGRES_USER: finesse
+      POSTGRES_PASSWORD: finesse_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finesse"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   # ── Redis (broker + cache) ──────────────────────────────────────────
   redis:
     image: redis:7-alpine
@@ -33,9 +53,18 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - CACHES_DEFAULT_LOCATION=redis://redis:6379/1
+      - DATABASE_URL=postgres://finesse:finesse_password@db:5432/finesse
     depends_on:
       redis:
         condition: service_healthy
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/api/input-options/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
   # ── Nginx (public-facing reverse proxy) ──────────────────────────
@@ -43,9 +72,14 @@ services:
     image: nginx:1-alpine
     ports:
       - "80:80"
+      # Uncomment for SSL once you have a domain and certificate:
+      # - "443:443"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - static_files:/app/staticfiles:ro
+      # Uncomment for SSL:
+      # - ./certbot/www:/var/www/certbot:ro
+      # - ./certbot/conf:/etc/letsencrypt:ro
     depends_on:
       - web
     restart: unless-stopped
@@ -56,7 +90,7 @@ services:
     command: >
       bash -c "python manage.py migrate --noinput &&
       python manage.py collectstatic --noinput &&
-      python -c \"import django, os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','chessslizer.settings'); django.setup(); from django.contrib.sites.models import Site; Site.objects.get_or_create(id=1, defaults={'domain':'localhost','name':'Finesse'})\""
+      python -c \"import django, os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','chessslizer.settings'); django.setup(); from django.contrib.sites.models import Site; Site.objects.get_or_create(id=1, defaults={'domain': os.environ.get('FRONTEND_URL', 'localhost').replace('https://', '').replace('http://', '').split('/')[0], 'name': 'Finesse'})\""
     volumes:
       - static_files:/app/staticfiles
     env_file:
@@ -65,8 +99,11 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - CACHES_DEFAULT_LOCATION=redis://redis:6379/1
+      - DATABASE_URL=postgres://finesse:finesse_password@db:5432/finesse
     depends_on:
       redis:
+        condition: service_healthy
+      db:
         condition: service_healthy
     restart: "no"
 
@@ -83,8 +120,11 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - CACHES_DEFAULT_LOCATION=redis://redis:6379/1
+      - DATABASE_URL=postgres://finesse:finesse_password@db:5432/finesse
     depends_on:
       redis:
+        condition: service_healthy
+      db:
         condition: service_healthy
     restart: unless-stopped
 
@@ -101,11 +141,15 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - CACHES_DEFAULT_LOCATION=redis://redis:6379/1
+      - DATABASE_URL=postgres://finesse:finesse_password@db:5432/finesse
     depends_on:
       redis:
+        condition: service_healthy
+      db:
         condition: service_healthy
     restart: unless-stopped
 
 volumes:
   redis_data:
   static_files:
+  postgres_data:

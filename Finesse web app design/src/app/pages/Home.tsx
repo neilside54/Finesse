@@ -110,8 +110,8 @@ export function Home() {
           />
           <FeatureCard
             icon={<Clock className="text-[#C8A96E]" size={18} />}
-            title="Time Management"
-            description="Analyze how you spend your clock in critical positions vs routine moves."
+            title="Game Phases"
+            description="Breakdown of your performance across opening, middlegame, and endgame to spot where you lose the most value."
           />
         </div>
       </section>

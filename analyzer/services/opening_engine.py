@@ -126,19 +126,6 @@ class ChessOpeningEngine:
                     })
         return sorted(bad_openings, key=lambda x: (x["severity"] != "CRITICAL", x["win_rate"]))
 
-    def _strong_openings(self, top_white, top_black):
-        combined = sorted(top_white + top_black, key=lambda x: (x["win_rate"], x["total_games"]), reverse=True)
-        return [
-            {
-                "opening": item["opening"],
-                "eco": item["eco"],
-                "total_games": item["total_games"],
-                "win_rate": item["win_rate"],
-                "direction": "higher_is_better",
-            }
-            for item in combined
-        ]
-
     def _build_opening_trends(self, family_stats):
         trends = []
         for color in ["white", "black"]:

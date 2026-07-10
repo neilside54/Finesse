@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router";
 import {
-  ArrowLeft, ChevronDown, ChevronUp, Crosshair, BookOpen, Clock,
+  ArrowLeft, ChevronDown, ChevronUp, Crosshair, BookOpen,
   Layers, Crown, BarChart3, BookmarkPlus, Check, Loader2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, Badge } from "../components/ui";
@@ -55,7 +55,6 @@ export function useTaskResult(taskId?: string, interval = 3000) {
 const SECTIONS = [
   { id: "skills", title: "Skills", icon: Crosshair, description: "Accuracy, resourcefulness, and conversion — how well you play and recover." },
   { id: "openings", title: "Openings", icon: BookOpen, description: "Your opening repertoire, trends, and lines needing study." },
-  { id: "time_management", title: "Time Management", icon: Clock, description: "Clock discipline and time trouble patterns." },
   { id: "game_phases", title: "Game Phases", icon: Layers, description: "Performance across opening, middlegame, and endgame." },
   { id: "pieces", title: "Piece Accuracy", icon: Crown, description: "How accurately you handle each piece type." },
   { id: "general_stats", title: "Statistics", icon: BarChart3, description: "Win rate, game volume, and per-mode breakdowns." },
@@ -63,7 +62,7 @@ const SECTIONS = [
 
 const SECTION_TELEMETRY_KEY: Record<string, string> = {
   skills: "skills_telemetry",
-  time_management: "time_report",
+
   game_phases: "phase_telemetry",
   pieces: "piece_telemetry",
   openings: "opening_stats",
@@ -296,16 +295,12 @@ export function Results() {
 function HeroOverview({ taskResult }: { taskResult: any }) {
   const snapshot = taskResult?.snapshot ?? {};
   return (
-    <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-8 py-8 border border-[#3D2B1A] bg-[#251A12]">
+    <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-8 py-8 border border-[#3D2B1A] bg-[#251A12]">
       <ScoreRing label="Accuracy" value={snapshot.accuracy ?? 0} peerValue={snapshot.peer_accuracy} />
       <ScoreRing label="Win Rate" value={snapshot.win_rate ?? 0} />
       <ScoreRing label="Resourcefulness" value={snapshot.resourcefulness ?? 0} />
       <ScoreRing label="Conversion" value={snapshot.conversion ?? 0} />
-      <ScoreRing
-        label="Panic Rate"
-        value={snapshot.panic_rate ?? 0}
-        color={snapshot.panic_rate > 20 ? "#B85C4A" : "#C8A96E"}
-      />
+
       <div className="flex flex-col items-center justify-center gap-1">
         <span
           className="text-3xl font-bold tracking-tight text-[#F0E6D3]"

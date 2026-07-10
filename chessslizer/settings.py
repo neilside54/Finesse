@@ -13,18 +13,29 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from pathlib import Path
 
+import dj_database_url
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+# ── Production-via-env helpers ────────────────────────────────────────
+def _bool_from_env(name: str, default: str = "false") -> bool:
+    """Read an env var and return True for '1', 'true', 'yes' (case-insensitive)."""
+    return os.environ.get(name, default).strip().lower() in ("1", "true", "yes")
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-u#9^$q$#)%xd$xq2=2b^by=$cr6(g4a56)k2p+j2=&o7_+18wv'
+SECRET_KEY = os.environ.get(
+    'SECRET_KEY',
+    'django-insecure-u#9^$q$#)%xd$xq2=2b^by=$cr6(g4a56)k2p+j2=&o7_+18wv',
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = _bool_from_env('DEBUG', 'true')
 
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
@@ -89,15 +100,25 @@ TEMPLATES = [
 WSGI_APPLICATION = 'chessslizer.wsgi.application'
 
 
-# Database
+# Database — PostgreSQL via DATABASE_URL env, falls back to SQLite for dev
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if DATABASE_URL:
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=DATABASE_URL,
+            conn_max_age=600,
+            conn_health_checks=True,
+        )
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 
 # Password validation
@@ -142,9 +163,20 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-CORS_ALLOW_ALL_ORIGINS = True
+# ── CORS ──────────────────────────────────────────────────────────────
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+else:
+    CORS_ALLOW_ALL_ORIGINS = False
+    CORS_ALLOWED_ORIGINS = [
+        origin.strip()
+        for origin in os.environ.get(
+            'CORS_ALLOWED_ORIGINS',
+            'https://yourdomain.com',
+        ).split(',')
+        if origin.strip()
+    ]
 
-# Allow the Vite dev server origin for CSRF checks during local development
 CSRF_TRUSTED_ORIGINS = [
     origin.strip()
     for origin in os.environ.get(
@@ -156,17 +188,26 @@ CSRF_TRUSTED_ORIGINS = [
 
 # ── Celery and Redis settings ─────────────────────────────────────────
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/0')
+
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', REDIS_URL)
 CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', REDIS_URL)
+
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 
+# ── Cache configuration ────────────────────────────────────────────
 CACHES = {
     'default': {
-        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': os.environ.get('CACHES_DEFAULT_LOCATION', REDIS_URL.replace('/0', '/1')),
+        'BACKEND': os.environ.get(
+            'DJANGO_CACHE_BACKEND',
+            'django.core.cache.backends.redis.RedisCache',
+        ),
+        'LOCATION': os.environ.get(
+            'CACHES_DEFAULT_LOCATION',
+            REDIS_URL.replace('/0', '/1'),
+        ),
     }
 }
 
@@ -207,7 +248,7 @@ SOCIALACCOUNT_PROVIDERS = {
 # Stockfish engine path — set via env var in Docker, fallback to system PATH
 STOCKFISH_PATH = os.environ.get(
     'STOCKFISH_PATH',
-    str(BASE_DIR / 'engines' / 'stockfish.exe'),
+    'stockfish' if not DEBUG else str(BASE_DIR / 'engines' / 'stockfish.exe'),
 )
 
 # After social login, redirect to the frontend SPA

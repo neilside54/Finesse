@@ -18,7 +18,6 @@ class ChessAnalysisPipelineTests(SimpleTestCase):
             stats_engine=Mock(),
             opening_engine=Mock(),
             skills_engine=Mock(),
-            time_engine=Mock(),
             phase_engine=Mock(),
             piece_engine=Mock(),
         )
@@ -37,7 +36,6 @@ class ChessAnalysisPipelineTests(SimpleTestCase):
             stats_engine=Mock(),
             opening_engine=Mock(),
             skills_engine=Mock(),
-            time_engine=Mock(),
             phase_engine=Mock(),
             piece_engine=Mock(),
             stockfish_path="/definitely/missing/stockfish",
@@ -73,17 +71,19 @@ class ChessAnalysisPipelineTests(SimpleTestCase):
             "games": [],
         }
 
-        time_engine = Mock()
-        time_engine.analyze_time.return_value = {"panic_rate": {"raw": 0.0, "peer": 20.0}}
-
         phase_engine = Mock()
         phase_engine.analyze_from_traces.return_value = {
-            "metrics": [{"name": "opening", "value": 0.9, "peer_average": 0.9}]
+            "opening": {"raw": 0.9, "peer": 0.9, "peer_source": "estimated", "visual": {}},
+            "middlegame": {"raw": 0.5, "peer": 1.1, "peer_source": "estimated", "visual": {}},
+            "endgame": {"raw": 0.3, "peer": 1.3, "peer_source": "estimated", "visual": {}},
+            "verdict": ["test verdict"]
         }
 
         piece_engine = Mock()
         piece_engine.analyze_from_traces.return_value = {
-            "metrics": [{"name": "P", "value": 45.0, "peer_average": 45.0}]
+            "P": {"raw": 45.0, "peer": 45.0, "peer_source": "estimated", "visual": {}},
+            "N": {"raw": 50.0, "peer": 42.0, "peer_source": "estimated", "visual": {}},
+            "verdict": ["test verdict"]
         }
 
         game_evaluator = Mock()
@@ -94,7 +94,6 @@ class ChessAnalysisPipelineTests(SimpleTestCase):
             stats_engine=stats_engine,
             opening_engine=opening_engine,
             skills_engine=skills_engine,
-            time_engine=time_engine,
             phase_engine=phase_engine,
             piece_engine=piece_engine,
             game_evaluator=game_evaluator,
@@ -136,9 +135,6 @@ class ChessAnalysisPipelineTests(SimpleTestCase):
             "games": [],
         }
 
-        time_engine = Mock()
-        time_engine.analyze_time.return_value = {"panic_rate": {"raw": 5.0, "peer": 20.0}}
-
         phase_engine = Mock()
         phase_engine.analyze_from_traces.return_value = {}
 
@@ -153,7 +149,6 @@ class ChessAnalysisPipelineTests(SimpleTestCase):
             stats_engine=stats_engine,
             opening_engine=opening_engine,
             skills_engine=skills_engine,
-            time_engine=time_engine,
             phase_engine=phase_engine,
             piece_engine=piece_engine,
             game_evaluator=game_evaluator,

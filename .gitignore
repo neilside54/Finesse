@@ -41,3 +41,5 @@ celerybeat-schedule
 Thumbs.db
 Ehthumbs.db
 Desktop.ini
+
+engines/stockfish.exe

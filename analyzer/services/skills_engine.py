@@ -91,6 +91,33 @@ class ChessSkillsEngine:
         results["verdict"] = self._generate_verdict(results)
         results["peer_accuracy_samples"] = peer_samples
         results["peer_accuracy_actual"] = peer_accuracy_actual
+
+        # Emit an "overall" key so the pipeline's _build_snapshot and
+        # _build_analysis_sections can read total_games_analyzed, avg_accuracy, etc.
+        total_games_analyzed = len([g for g, t in game_data if t is not None])
+        results["overall"] = {
+            "total_games_analyzed": total_games_analyzed,
+            "avg_accuracy": accuracy,
+            "avg_resourcefulness": resourcefulness,
+            "avg_conversion": conversion,
+            "peer_accuracy": {
+                "value": peer_accuracy_actual,
+                "source": "actual",
+            } if peer_accuracy_actual is not None else None,
+            "peer_avg_accuracy": {
+                "value": results["accuracy"]["peer"],
+                "source": results["accuracy"]["peer_source"],
+            },
+            "peer_avg_resourcefulness": {
+                "value": results["resourcefulness"]["peer"],
+                "source": results["resourcefulness"]["peer_source"],
+            },
+            "peer_avg_conversion": {
+                "value": results["conversion"]["peer"],
+                "source": results["conversion"]["peer_source"],
+            },
+        }
+
         return results
 
     def _format_results(self, metrics, peer_accuracy_actual):
