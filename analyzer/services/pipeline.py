@@ -108,25 +108,44 @@ class ChessAnalysisPipeline:
         skills_report: dict[str, Any] = {}
         phase_telemetry: dict[str, Any] = {}
 
-        try:
-            with self.engine_factory(engine_path) as engine:
-                # ── SINGLE STOCKFISH PASS ──────────────────────────────
-                # Evaluate every game once. Each trace stores eval_after,
-                # best_move_uci, played_uci, san, piece_symbol, is_best_move.
-                # All downstream engines (skills, pieces, phases, blunders)
-                # derive their metrics from these traces — no redundant
-                # engine.analyse() calls.
-                _emit("analyzing", 0, len(raw_games), f"Evaluating {len(raw_games)} game(s) with Stockfish...")
+        # ── SINGLE STOCKFISH PASS (with engine restart resilience) ────
+        # Stockfish can crash (SIGSEGV) after many consecutive analyses.
+        # We restart the engine every GAMES_PER_ENGINE games and also
+        # catch "engine event loop dead" errors to respawn immediately.
+        GAMES_PER_ENGINE = 50
+        game_data: list[tuple[dict[str, Any], Any]] = []
+        total = len(raw_games)
+        _emit("analyzing", 0, total, f"Evaluating {total} game(s) with Stockfish...")
 
-                game_data: list[tuple[dict[str, Any], Any]] = []
-                for idx, game in enumerate(raw_games, 1):
-                    try:
-                        _emit(
-                            "analyzing",
-                            idx,
-                            len(raw_games),
-                            f"Analyzing game {idx}/{len(raw_games)}...",
+        engine = None
+        games_on_current_engine = 0
+        try:
+            for idx, game in enumerate(raw_games, 1):
+                # Restart engine if limit reached or previous one died
+                if engine is None or games_on_current_engine >= GAMES_PER_ENGINE:
+                    if engine is not None:
+                        self.logger.info(
+                            "Restarting Stockfish after %d games (preventive).",
+                            games_on_current_engine,
                         )
+                        try:
+                            engine.close()
+                        except Exception:
+                            pass
+                    try:
+                        engine = self.engine_factory(engine_path)
+                        games_on_current_engine = 0
+                    except Exception as exc:
+                        return {
+                            "status": "error",
+                            "error": f"Failed to launch Stockfish: {exc}",
+                        }
+
+                _emit("analyzing", idx, total, f"Analyzing game {idx}/{total}...")
+
+                evaluated = False
+                for attempt in range(2):  # max 2 attempts per game
+                    try:
                         trace = self.game_evaluator.evaluate(
                             game.get("pgn"),
                             engine,
@@ -134,69 +153,113 @@ class ChessAnalysisPipeline:
                             time_limit=0.05,
                         )
                         game_data.append((game, trace))
+                        games_on_current_engine += 1
+                        evaluated = True
+                        break
                     except Exception as exc:
-                        self.logger.warning(
-                            "Evaluation failed for %s: %s", game.get("game_id"), exc
-                        )
-                        errors.append(
-                            f"Evaluation failed for game {game.get('game_id')}: {exc}"
-                        )
-                        game_data.append((game, None))
+                        exc_msg = str(exc)
+                        is_dead = "dead" in exc_msg or "died" in exc_msg
+                        if is_dead and attempt == 0:
+                            # Engine died — restart and retry this game once
+                            self.logger.warning(
+                                "Engine died on game %d (%s), restarting...",
+                                idx, exc_msg,
+                            )
+                            try:
+                                engine.close()
+                            except Exception:
+                                pass
+                            try:
+                                engine = self.engine_factory(engine_path)
+                                games_on_current_engine = 0
+                            except Exception as restart_exc:
+                                self.logger.error(
+                                    "Engine restart failed: %s", restart_exc
+                                )
+                                break  # give up on remaining games
+                        else:
+                            self.logger.warning(
+                                "Evaluation failed for %s: %s",
+                                game.get("game_id"), exc_msg,
+                            )
+                            errors.append(
+                                f"Evaluation failed for game {game.get('game_id')}: {exc_msg}"
+                            )
+                            game_data.append((game, None))
+                            evaluated = True
+                            break
 
-                _emit("metrics", 0, 4, "Deriving piece accuracy...")
+                if not evaluated:
+                    game_data.append((game, None))
 
-                # ── Derive all metrics from traces (no Stockfish calls) ──
-
-                piece_telemetry = self._safe_call(
-                    "piece analysis",
-                    lambda: self.piece_engine.analyze_from_traces(game_data),
-                    errors,
-                    default={},
-                )
-
-                for game, trace in game_data:
-                    if trace is None:
-                        continue
-                    try:
-                        opponent_name = game.get("opponent_name", "Unknown")
-                        user_color = game.get("user_color", "white")
-                        top_blunders, summary = trace.blunders_for(
-                            user_color, opponent_name=opponent_name
-                        )
-                        blunders_report.extend(top_blunders)
-                        blunder_summaries.append(summary)
-                    except Exception as exc:
-                        self.logger.warning(
-                            "Blunder detection failed for %s: %s",
-                            game.get("game_id"), exc,
-                        )
-                        errors.append(
-                            f"Blunder detection failed for game {game.get('game_id')}: {exc}"
-                        )
-
-                skills_report = self._safe_call(
-                    "skills analysis",
-                    lambda: self.skills_engine.analyze_skills_from_traces(
-                        game_data, username=username
-                    ),
-                    errors,
-                    default={},
-                )
-                self._persist_accuracy_samples(skills_report, platform, errors)
-
-                phase_telemetry = self._safe_call(
-                    "phase analysis",
-                    lambda: self.phase_engine.analyze_from_traces(game_data),
-                    errors,
-                    default={},
-                )
+            if engine is not None:
+                try:
+                    engine.close()
+                except Exception:
+                    pass
 
         except FileNotFoundError as exc:
+            if engine is not None:
+                try:
+                    engine.close()
+                except Exception:
+                    pass
             return {"status": "error", "error": f"Stockfish engine not found: {exc}"}
         except OSError as exc:
+            if engine is not None:
+                try:
+                    engine.close()
+                except Exception:
+                    pass
             return {"status": "error", "error": f"Failed to launch Stockfish: {exc}"}
-        except Exception as exc:
-            return {"status": "error", "error": f"Stockfish analysis failed: {exc}"}
+
+        _emit("metrics", 0, 4, "Deriving piece accuracy...")
+
+        # ── Derive all metrics from traces (no Stockfish calls) ──
+
+        piece_telemetry = self._safe_call(
+            "piece analysis",
+            lambda: self.piece_engine.analyze_from_traces(game_data),
+            errors,
+            default={},
+        )
+
+        for game, trace in game_data:
+            if trace is None:
+                continue
+            try:
+                opponent_name = game.get("opponent_name", "Unknown")
+                user_color = game.get("user_color", "white")
+                top_blunders, summary = trace.blunders_for(
+                    user_color, opponent_name=opponent_name
+                )
+                blunders_report.extend(top_blunders)
+                blunder_summaries.append(summary)
+            except Exception as exc:
+                self.logger.warning(
+                    "Blunder detection failed for %s: %s",
+                    game.get("game_id"), exc,
+                )
+                errors.append(
+                    f"Blunder detection failed for game {game.get('game_id')}: {exc}"
+                )
+
+        skills_report = self._safe_call(
+            "skills analysis",
+            lambda: self.skills_engine.analyze_skills_from_traces(
+                game_data, username=username
+            ),
+            errors,
+            default={},
+        )
+        self._persist_accuracy_samples(skills_report, platform, errors)
+
+        phase_telemetry = self._safe_call(
+            "phase analysis",
+            lambda: self.phase_engine.analyze_from_traces(game_data),
+            errors,
+            default={},
+        )
 
         # ── Transform engine dicts into frontend-compat metrics arrays ─
         piece_telemetry = self._normalize_piece_telemetry(piece_telemetry)
