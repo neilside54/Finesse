@@ -570,6 +570,7 @@ class ChessAnalysisPipeline:
             str(project_root / "engines" / "stockfish.exe"),
             "/usr/local/bin/stockfish",
             "/usr/bin/stockfish",
+            "/usr/games/stockfish",   # Debian package location
             "stockfish",
         ]
 

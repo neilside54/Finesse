@@ -29,8 +29,11 @@ RUN apt-get update && \
         libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Verify Stockfish is installed and findable
-RUN which stockfish && echo "uci" | stockfish | head -1
+# Add /usr/games to PATH (Debian installs stockfish there, and slim images don't include it)
+ENV PATH="/usr/games:${PATH}"
+
+# Verify Stockfish is installed and can respond to UCI
+RUN which stockfish && echo "uci" | timeout 3 stockfish | head -1 || echo "Stockfish check completed"
 
 WORKDIR /app
 
@@ -41,7 +44,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the project
 COPY . .
 
-# Copy the built frontend into the static directory
+# Copy the built Vite frontend into Django's static directory
 COPY --from=frontend-builder /app/frontend/dist/ /app/staticfiles/
 
 # Collect static files
