@@ -17,6 +17,8 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include, re_path
 from django.conf.urls.static import static
+from django.conf import settings
+from django.views.static import serve as static_serve
 from analyzer.views import FrontendView
 
 urlpatterns = [
@@ -24,7 +26,12 @@ urlpatterns = [
     path('accounts/', include('allauth.urls')),
     path('api/', include('accounts.urls')),
     path('api/', include('analyzer.urls')),
-    # SPA catch-all: any non-API/admin/accounts path serves index.html
-    # so react-router can handle client-side routing.
-    re_path(r'^(?!api/|admin/|accounts/).*$', FrontendView.as_view(), name='spa-catchall'),
+    # Serve Vite-built assets (JS, CSS, images from /assets/*)
+    re_path(r'^assets/(?P<path>.*)$', static_serve,
+            {'document_root': str(settings.STATIC_ROOT / 'assets')},
+    # Serve other root-level Vite files (favicon, etc.)
+    re_path(r'^(?P<path>vite\.svg)$', static_serve,
+            {'document_root': str(settings.STATIC_ROOT)}),
+    # SPA catch-all: any non-API/admin/account/assets path serves index.html
+    re_path(r'^(?!api/|admin/|accounts/|assets/|vite\.svg).*$', FrontendView.as_view(), name='spa-catchall'),
 ]
