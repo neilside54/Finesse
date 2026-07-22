@@ -7,12 +7,10 @@ FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 
-# Copy only package files first for layer caching
-COPY "Finesse web app design/package.json" "Finesse web app design/package-lock.json"* ./
-RUN npm install --legacy-peer-deps 2>/dev/null || npm install
+# Copy frontend source (JSON array syntax avoids quoting issues with spaces)
+COPY ["Finesse web app design/", "."]
 
-# Copy the rest of the frontend source
-COPY "Finesse web app design/" .
+RUN npm install --legacy-peer-deps 2>/dev/null || npm install
 
 # Build the Vite production bundle
 RUN npm run build
@@ -23,14 +21,12 @@ FROM python:3.13-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Install system dependencies: Stockfish, PostgreSQL client, build tools
+# Install system dependencies: Stockfish, build tools
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         stockfish \
         gcc \
         libffi-dev \
-        libpq-dev \
-        curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Verify Stockfish is installed and findable
