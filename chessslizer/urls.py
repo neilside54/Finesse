@@ -28,7 +28,7 @@ urlpatterns = [
     path('api/', include('analyzer.urls')),
     # Serve Vite-built assets (JS, CSS, images from /assets/*)
     re_path(r'^assets/(?P<path>.*)$', static_serve,
-            {'document_root': str(settings.STATIC_ROOT / 'assets')},
+            {'document_root': str(settings.STATIC_ROOT / 'assets')}),
     # Serve other root-level Vite files (favicon, etc.)
     re_path(r'^(?P<path>vite\.svg)$', static_serve,
             {'document_root': str(settings.STATIC_ROOT)}),
