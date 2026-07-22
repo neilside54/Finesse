@@ -259,6 +259,10 @@ STOCKFISH_PATH = os.environ.get(
     'stockfish' if not DEBUG else str(BASE_DIR / 'engines' / 'stockfish.exe'),
 )
 
+# Use HTTPS for allauth callback URLs in production
+if not DEBUG:
+    ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https'
+
 # After social login, redirect to the frontend SPA
 # In dev, the frontend runs on port 5173; in production, set via env var.
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')

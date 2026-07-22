@@ -19,13 +19,27 @@ fi
 # Run migrations on every startup (safe for SQLite and PostgreSQL)
 python manage.py migrate --noinput 2>/dev/null || true
 
-# Ensure the sites table has a default entry for django-allauth
+# Ensure the sites table has a correct entry for django-allauth
+# Use FRONTEND_URL if set, otherwise fall back to localhost
 python -c "
 import django, os
+from urllib.parse import urlparse
+
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'chessslizer.settings')
 django.setup()
+
 from django.contrib.sites.models import Site
-Site.objects.get_or_create(id=1, defaults={'domain': 'localhost', 'name': 'Finesse'})
+
+frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
+domain = urlparse(frontend_url).hostname or 'localhost'
+
+site, created = Site.objects.get_or_create(
+    id=1,
+    defaults={'domain': domain, 'name': 'Finesse'},
+)
+if not created and site.domain != domain:
+    site.domain = domain
+    site.save()
 " 2>/dev/null || true
 
 case "${SERVICE}" in
