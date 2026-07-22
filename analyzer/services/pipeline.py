@@ -154,7 +154,7 @@ class ChessAnalysisPipeline:
                     default={},
                 )
 
-                for game, trace in game_data[:10]:
+                for game, trace in game_data:
                     if trace is None:
                         continue
                     try:
@@ -177,7 +177,7 @@ class ChessAnalysisPipeline:
                 skills_report = self._safe_call(
                     "skills analysis",
                     lambda: self.skills_engine.analyze_skills_from_traces(
-                        game_data[:10], username=username
+                        game_data, username=username
                     ),
                     errors,
                     default={},
@@ -232,7 +232,7 @@ class ChessAnalysisPipeline:
 
         # ── Assemble final report ─────────────────────────────────────
         snapshot = self._build_snapshot(
-            skills_report, base_report, raw_games
+            skills_report, base_report, raw_games, len(raw_games)
         )
         highlights = self._build_highlights(
             skills_report, piece_telemetry, phase_telemetry, base_report
@@ -285,10 +285,11 @@ class ChessAnalysisPipeline:
         skills_report: dict,
         base_report: dict,
         raw_games: list,
+        total_games: int = 0,
     ) -> dict:
         skills = skills_report.get("overall", {})
         stats = base_report.get("overall", {})
-        total = skills.get("total_games_analyzed", 0)
+        total = total_games or skills.get("total_games_analyzed", 0) or len(raw_games)
         peer_acc = skills.get("peer_accuracy")
         return {
             "accuracy": skills.get("avg_accuracy", 0),

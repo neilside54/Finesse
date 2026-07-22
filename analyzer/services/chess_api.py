@@ -227,13 +227,23 @@ class ChessAPIClient:
                 for archive_url in reversed(archives):
                     res = await client.get(archive_url, follow_redirects=True)
                     if res.status_code == 200:
-                        month_games = res.json().get("games", [])
-                        all_games.extend(reversed(month_games))
+                        try:
+                            month_games = res.json().get("games", [])
+                            if month_games:
+                                all_games.extend(reversed(month_games))
+                        except (json.JSONDecodeError, Exception):
+                            pass  # Skip malformed archive data
 
                     if len(all_games) >= limit:
                         break
 
-                return [self._format_chess_com_game(g, normalized_username) for g in all_games[:limit]]
+                formatted = []
+                for g in all_games[:limit]:
+                    try:
+                        formatted.append(self._format_chess_com_game(g, normalized_username))
+                    except Exception:
+                        continue  # Skip unparseable games
+                return formatted
 
         try:
             return await self._retry_async(_do_fetch)
