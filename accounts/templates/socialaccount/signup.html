@@ -1,0 +1,46 @@
+{% extends "socialaccount/base.html" %}
+
+{% block head_title %}Complete Registration — Finesse Chess Analysis{% endblock %}
+{% block title %}Almost There{% endblock %}
+{% block description %}
+<p>You're about to sign in using your {{ account.get_provider.name }} account. Choose a username to finish creating your Finesse account.</p>
+{% endblock %}
+
+{% block content %}
+<form method="POST" action="{% url 'socialaccount_signup' %}">
+  {% csrf_token %}
+
+  {% if form.non_field_errors %}
+  <ul class="errorlist">
+    {% for error in form.non_field_errors %}
+    <li>{{ error }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% for field in form.visible_fields %}
+  <div class="form-group">
+    <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+    {{ field }}
+    {% if field.errors %}
+    <ul class="errorlist" style="margin-top: 0.5rem;">
+      {% for error in field.errors %}<li>{{ error }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+    {% if field.help_text %}
+    <div class="help-text">{{ field.help_text }}</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  {% for hidden in form.hidden_fields %}
+  {{ hidden }}
+  {% endfor %}
+
+  <button type="submit" class="btn-primary">Complete Registration</button>
+</form>
+
+<div class="auth-footer" style="margin-top: 1.5rem;">
+  <a href="{% url 'account_login' %}">Already have an account? Sign in</a>
+</div>
+{% endblock %}

@@ -294,13 +294,39 @@ class InputOptionsView(View):
 
 @method_decorator(csrf_exempt, name="dispatch")
 class SaveAnalysisView(View):
-    """Persist a completed analysis to the logged-in user's library."""
+    """Persist a completed analysis to the logged-in user's library.
+
+    We use ``@csrf_exempt`` because the SPA may send requests without
+    the CSRF token header when coming from an external redirect.
+    Instead, we manually validate Origin / Referer headers as a
+    lightweight, SPA-safe CSRF defence (see ``_check_csrf_origin``).
+    """
+
+    def _check_csrf_origin(self, request) -> bool:
+        """Accept the request only if the Origin or Referer matches
+        one of the trusted origins defined in settings."""
+        origin = request.META.get('HTTP_ORIGIN', '')
+        referer = request.META.get('HTTP_REFERER', '')
+        trusted = settings.CSRF_TRUSTED_ORIGINS
+        for allowed in trusted:
+            if allowed in origin or allowed in referer:
+                return True
+        return False
 
     def post(self, request, *args, **kwargs):
         if not request.user.is_authenticated:
             return JsonResponse(
                 {"error": "You must be logged in to save analyses."},
                 status=401,
+            )
+
+        # CSRF protection: validate Origin/Referer header against
+        # CSRF_TRUSTED_ORIGINS. This is a standard CSRF defence for
+        # SPAs that may not always carry a CSRF token header.
+        if not self._check_csrf_origin(request):
+            return JsonResponse(
+                {"error": "CSRF validation failed. Origin or Referer header must match a trusted origin."},
+                status=403,
             )
 
         try:

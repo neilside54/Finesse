@@ -1,0 +1,22 @@
+{% extends "account/base.html" %}
+
+{% block head_title %}Authentication Error — Finesse Chess Analysis{% endblock %}
+{% block title %}Something Went Wrong{% endblock %}
+{% block description %}<p>We couldn't complete the authentication process.</p>{% endblock %}
+
+{% block content %}
+<div style="text-align: center; padding: 1rem 0;">
+  <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.5;">✕</div>
+  <p style="color: #A89070; font-size: 0.85rem; line-height: 1.6; margin-bottom: 1.5rem;">
+    There was an error authenticating your account with the external service.
+    Please try again or use a different sign-in method.
+  </p>
+  <a href="{% url 'account_login' %}" class="btn-primary" style="text-decoration: none; display: inline-flex; width: auto; padding: 0 2rem;">
+    Try Again
+  </a>
+</div>
+
+<div class="auth-footer" style="margin-top: 1.5rem;">
+  <a href="/">Back to Home</a>
+</div>
+{% endblock %}

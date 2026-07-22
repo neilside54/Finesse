@@ -28,14 +28,24 @@ def _bool_from_env(name: str, default: str = "false") -> bool:
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
+# ═══════════════════════════════════════════════════════════════════════
+# 🔐 SECURITY — CRITICAL: set all of these via Railway Variables
+# ═══════════════════════════════════════════════════════════════════════
+
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get(
-    'SECRET_KEY',
-    'django-insecure-u#9^$q$#)%xd$xq2=2b^by=$cr6(g4a56)k2p+j2=&o7_+18wv',
-)
+# Generate one at https://djecrety.ir/ and add to Railway Variables
+SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    if _bool_from_env('DEBUG', 'false'):
+        SECRET_KEY = 'django-insecure-dev-only-dont-use-in-production'
+    else:
+        raise RuntimeError(
+            'SECRET_KEY environment variable is required in production. '
+            'Generate one at https://djecrety.ir/ and add it to your Railway Variables.'
+        )
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = _bool_from_env('DEBUG', 'true')
+DEBUG = _bool_from_env('DEBUG', 'false')  # ← Default FALSE now!
 
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
@@ -231,12 +241,23 @@ AUTHENTICATION_BACKENDS = [
     'allauth.account.auth_backends.AuthenticationBackend',
 ]
 
-# Social login flows directly — no email confirmation gate
+# ── Account security ────────────────────────────────────────────
 ACCOUNT_LOGIN_METHODS = {'username', 'email'}
-ACCOUNT_EMAIL_VERIFICATION = 'none'
+# 'optional' = email not required for signup, but if provided we can verify later
+ACCOUNT_EMAIL_VERIFICATION = 'optional'
 ACCOUNT_LOGIN_ON_EMAIL_CONFIRMATION = True
-ACCOUNT_LOGOUT_ON_GET = True
+# Require POST for logout (prevents prefetch-based accidental logout)
+ACCOUNT_LOGOUT_ON_GET = False
 ACCOUNT_SESSION_REMEMBER = True
+
+# ── Rate limiting (prevents brute-force login/signup attacks) ─────
+# Format: count/period — s=seconds, m=minutes, h=hours, d=days
+ACCOUNT_RATE_LIMITS = {
+    # Max 5 failed login attempts per IP per 5 minutes
+    'login_failed': '5/5m/ip',
+    # Max 3 signups per IP per hour (default is 20/m — too generous)
+    'signup': '3/1h/ip',
+}
 
 # Social providers — placeholders replaced by env vars in production
 SOCIALACCOUNT_PROVIDERS = {
@@ -248,6 +269,9 @@ SOCIALACCOUNT_PROVIDERS = {
         'QUERY_EMAIL': True,
     },
 }
+
+SOCIALACCOUNT_ADAPTER = 'accounts.adapter.ChesslizerSocialAccountAdapter'
+
 # NOTE: OAuth credentials (client_id / secret) are configured via the
 # SocialApp entries in the database (Django admin). Do NOT add 'APP'
 # configs here — allauth merges DB + settings apps, causing a
@@ -274,6 +298,25 @@ ACCOUNT_LOGOUT_REDIRECT_URL = FRONTEND_URL + '/login'
 if DEBUG:
     SESSION_COOKIE_DOMAIN = 'localhost'
     CSRF_COOKIE_DOMAIN = 'localhost'
+
+# ═══════════════════════════════════════════════════════════════════════
+# 🔐 HTTPS / COOKIE SECURITY — only in production (DEBUG=False)
+# ═══════════════════════════════════════════════════════════════════════
+if not DEBUG:
+    # Tell Django it's behind Railway's HTTPS-terminating proxy
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+    # Only send session + CSRF cookies over HTTPS
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
+    # Prevent JavaScript from reading the session cookie (mitigates XSS)
+    SESSION_COOKIE_HTTPONLY = True
+
+    # HTTP Strict-Transport-Security — tell browsers to always use HTTPS
+    # Start with a short duration first, then increase after confirming no issues
+    SECURE_HSTS_SECONDS = 2592000  # 30 days (start safe; increase to 1 year later)
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 
 # Custom user model — must be set before running the first migration.
 AUTH_USER_MODEL = 'accounts.User'

@@ -1,0 +1,25 @@
+{% extends "account/base.html" %}
+
+
+
+{% block head_title %}Error — Finesse Chess Analysis{% endblock %}
+{% block title %}Authentication Error{% endblock %}
+{% block description %}<p>Something went wrong during the authentication process.</p>{% endblock %}
+
+
+{% block content %}
+<div style="text-align: center; padding: 1rem 0;">
+  <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.5;">⚠</div>
+  <p style="color: #A89070; font-size: 0.85rem; line-height: 1.6; margin-bottom: 1.5rem;">
+    The authentication could not be completed. This may be due to a
+    temporary issue or because you cancelled the process.
+  </p>
+  <a href="{% url 'account_login' %}" class="btn-primary" style="text-decoration: none; display: inline-flex; width: auto; padding: 0 2rem;">
+    Try Again
+  </a>
+</div>
+
+<div class="auth-footer" style="margin-top: 1.5rem;">
+  <a href="/">Back to Home</a>
+</div>
+{% endblock %}

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block head_title %}Finesse — Chess Analysis{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 16px; -webkit-font-smoothing: antialiased; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1C1510;
+      color: #F0E6D3;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+    .auth-container {
+      width: 100%;
+      max-width: 420px;
+    }
+    .auth-card {
+      background: #251A12;
+      border: 1px solid #3D2B1A;
+      padding: 2.5rem 2rem;
+    }
+    .auth-header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    .auth-header h1 {
+      font-family: 'Playfair Display', Georgia, serif;
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #F0E6D3;
+      margin-bottom: 0.5rem;
+    }
+    .auth-header p {
+      font-size: 0.8rem;
+      color: #A89070;
+      line-height: 1.5;
+    }
+    .auth-logo {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 48px;
+      height: 48px;
+      margin-bottom: 1rem;
+      border: 1px solid #3D2B1A;
+      background: #2E2016;
+      font-size: 1.4rem;
+    }
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+    .form-group label {
+      display: block;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: #A89070;
+      margin-bottom: 0.5rem;
+      font-weight: 500;
+    }
+    .form-group input {
+      width: 100%;
+      height: 48px;
+      padding: 0 1rem;
+      border: 1px solid #3D2B1A;
+      background: #1C1510;
+      color: #F0E6D3;
+      font-size: 0.875rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .form-group input:focus {
+      border-color: #C8A96E;
+    }
+    .form-group input::placeholder {
+      color: #A89070;
+      opacity: 0.5;
+    }
+    .errorlist {
+      list-style: none;
+      margin-bottom: 1rem;
+      padding: 0.75rem 1rem;
+      border: 1px solid rgba(184,92,74,0.3);
+      background: rgba(184,92,74,0.08);
+    }
+    .errorlist li {
+      font-size: 0.75rem;
+      color: #B85C4A;
+      line-height: 1.5;
+    }
+    .btn-primary {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      width: 100%;
+      height: 52px;
+      border: none;
+      background: #C8A96E;
+      color: #1C1510;
+      font-size: 0.8rem;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      font-family: inherit;
+    }
+    .btn-primary:hover { background: #D4B87A; }
+    .btn-primary:active { transform: scale(0.97); }
+    .btn-secondary {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      width: 100%;
+      height: 48px;
+      border: 1px solid #3D2B1A;
+      background: #251A12;
+      color: #F0E6D3;
+      font-size: 0.8rem;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: background 0.15s;
+      text-decoration: none;
+      font-family: inherit;
+    }
+    .btn-secondary:hover { background: #2E2016; }
+    .btn-secondary:active { transform: scale(0.97); }
+    .auth-footer {
+      text-align: center;
+      margin-top: 1.5rem;
+      font-size: 0.75rem;
+      color: #A89070;
+    }
+    .auth-footer a {
+      color: #F0E6D3;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .auth-footer a:hover { text-decoration: underline; }
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin: 1.5rem 0;
+    }
+    .divider-line { flex: 1; height: 1px; background: #3D2B1A; }
+    .divider-text {
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: #A89070;
+      font-weight: 500;
+    }
+    .messages {
+      margin-bottom: 1rem;
+    }
+    .message {
+      padding: 0.75rem 1rem;
+      font-size: 0.75rem;
+      line-height: 1.5;
+      border: 1px solid;
+    }
+    .message.success { border-color: rgba(122,158,95,0.3); background: rgba(122,158,95,0.08); color: #7A9E5F; }
+    .message.error { border-color: rgba(184,92,74,0.3); background: rgba(184,92,74,0.08); color: #B85C4A; }
+    .message.info { border-color: rgba(200,169,110,0.3); background: rgba(200,169,110,0.08); color: #C8A96E; }
+    a { color: #C8A96E; }
+    a:hover { color: #D4B87A; }
+    .help-text {
+      font-size: 0.7rem;
+      color: #A89070;
+      margin-top: 0.35rem;
+    }
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+    .checkbox-group input[type="checkbox"] {
+      accent-color: #C8A96E;
+      width: 16px;
+      height: 16px;
+    }
+    .checkbox-group label {
+      font-size: 0.75rem;
+      color: #A89070;
+      margin: 0;
+      text-transform: none;
+      letter-spacing: normal;
+    }
+  </style>
+</head>
+<body>
+  <div class="auth-container">
+    <div class="auth-card">
+      <div class="auth-header">
+        <a href="/" style="text-decoration: none; display: block;">
+          <div class="auth-logo" style="margin: 0 auto 1rem;">♟</div>
+        </a>
+        <h1>{% block title %}Finesse{% endblock %}</h1>
+        {% block description %}<p>Chess analysis powered by Stockfish</p>{% endblock %}
+      </div>
+
+      {% if messages %}
+      <div class="messages">
+        {% for message in messages %}
+        <div class="message {{ message.tags }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% block content %}{% endblock %}
+    </div>
+
+    <div class="auth-footer">
+      {% block footer %}
+      &copy; {% now "Y" %} Finesse Chess Analysis
+      {% endblock %}
+    </div>
+  </div>
+</body>
+</html>
