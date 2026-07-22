@@ -30,7 +30,7 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Verify Stockfish is installed and findable
-RUN which stockfish && stockfish <<< "uci" | head -1
+RUN which stockfish && echo "uci" | stockfish | head -1
 
 WORKDIR /app
 
