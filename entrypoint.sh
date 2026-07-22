@@ -38,9 +38,10 @@ case "${SERVICE}" in
     celery -A chessslizer beat -l info
     ;;
   web|*)
-    echo "Starting gunicorn on 0.0.0.0:8001..."
+    PORT=${PORT:-8001}
+    echo "Starting gunicorn on 0.0.0.0:${PORT}..."
     exec gunicorn chessslizer.wsgi:application \
-        --bind 0.0.0.0:8001 \
+        --bind 0.0.0.0:${PORT} \
         --workers ${GUNICORN_WORKERS:-2} \
         --timeout ${GUNICORN_TIMEOUT:-1800} \
         --access-logfile -

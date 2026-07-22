@@ -17,6 +17,7 @@ django-cors-headers==4.9.0
 django-ratelimit==4.1.0
 dj-database-url==2.3.0
 gunicorn==23.0.0
+whitenoise==6.8.2
 psycopg2-binary==2.9.10
 h11==0.16.0
 httpcore==1.0.9
