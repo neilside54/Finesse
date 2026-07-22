@@ -148,8 +148,9 @@ class FrontendView(View):
 
     def get(self, request, *args, **kwargs):
         if os.path.isfile(_VITE_INDEX):
-            with open(_VITE_INDEX, 'rb') as f:
-                return FileResponse(f, content_type='text/html')
+            # Don't use 'with' here — gunicorn's sendfile reads the file
+            # asynchronously, and the context manager would close it early.
+            return FileResponse(open(_VITE_INDEX, 'rb'), content_type='text/html')
         # Fallback to the legacy Django template during local dev
         return TemplateView.as_view(template_name='analyzer/index.html')(request, *args, **kwargs)
 
